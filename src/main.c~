@@ -6,11 +6,12 @@ Automatic Program Generator
 http://www.hpinfotech.com
 
 Project : Mifare Card Reader CR038 (YLMF18)
-Version : 1.0.1
+Version : 2.0.0
 Date    : 1393 Bahman 13
 Author  : Meysam Pavizi
 Company : 
-Comments: This Program is able to understand successful commands and read NUID of card
+Comments: This Program is able to understand successful commands, read NUID of card
+          and read and write data
 
 
 Chip type               : ATmega128A
@@ -31,14 +32,22 @@ Data Stack size         : 1024
 void putchar1(char c);
 char getchar1(void);
 void init(void);
-unsigned int mp_antenna_sta(unsigned char status);
+
+unsigned char mp_led(unsigned char status);
+unsigned int mp_antenna(unsigned char status);
 unsigned int mp_request(unsigned char request);
 unsigned char mp_anticoll(unsigned char *NUID);
+unsigned char mp_select(unsigned char *NUID);
+unsigned char mp_halt(void);
+unsigned char mp_authentication2(unsigned char keyMode, unsigned char block, unsigned char *key);
+unsigned char mp_read(unsigned char block, unsigned char *data);
+unsigned char mp_write(unsigned char block, unsigned char *data);
+unsigned char mp_init_port(unsigned char baud);
 
 unsigned char p_length[2];
 unsigned int packet_length=0;
 unsigned char packet_xor=0;
-// unsigned char packet_timeout=0;
+bit packet_timeout=0;
 bit packet_complete=0;
 
 #define DATA_REGISTER_EMPTY (1<<UDRE0)
@@ -140,49 +149,154 @@ interrupt [TIM0_OVF] void timer0_ovf_isr(void)
 void main(void)
 {
 // Declare your local variables here
-
+unsigned char nuid[4];
+unsigned char key[6]={0xff,0xff,0xff,0xff,0xff,0xff};
+unsigned char data[16];
 init();
-lcd_puts("NUID: ");
-//mp_request();
-//mp_anticoll();
+
+delay_ms(1000); // to prevent CR038 crash
+//mp_init_port(3);
+mp_led(3);
+mp_antenna(0);
+mp_request(0x52);
+mp_anticoll(nuid);
+mp_select(nuid);
+//mp_halt();
+mp_authentication2(0x60,0x01,key);
+mp_read(0x01,data);
+mp_write(0x01,data);
+
 while (1)
       {
       // Place your code here
          char i=0;
+         char n=0;
          unsigned char sr[16];
-         unsigned char nuid[4];
+//         unsigned char nuid[4];
          
-         if ( mp_antenna_sta(1) )
-            if ( mp_request(0x52) )
-            {
-               mp_anticoll(nuid);
-               lcd_clear();
-               lcd_puts("NUID: ");
-               for(i=0;i<=3;i++)
-               {
-                  sprintf(sr,"%02X",nuid[i]);
-                  lcd_puts(sr);
-               }
-            }
-            else
-            {
-               lcd_clear();
-               lcd_puts("No Card!");
-            }
-         else
+//         if ( mp_antenna_sta(1) )
+//            if ( mp_request(0x52) )
+//            {
+//               if ( mp_anticoll(nuid) )
+//               {
+//                  n=mp_select(nuid);
+//                  lcd_clear();
+//                  lcd_puts("NUID:");
+//                  for(i=0;i<=3;i++)
+//                  {
+//                     sprintf(sr,"%02X",nuid[i]);
+//                     lcd_puts(sr);
+//                  }
+//                  sprintf(sr," %d",n);
+//                  lcd_puts(sr);
+//               }
+//            }
+//            else
+//            {
+//               lcd_clear();
+//               lcd_puts("No Card!");
+//            }
+//         else
+//         {
+//            lcd_clear();
+//            lcd_puts("System Crashed!");
+//         }
+
+         lcd_clear();
+         for(i=0;i<=(packet_length+3);i++)
          {
-            lcd_clear();
-            lcd_puts("System Crashed!");
-         } 
-         
+            sprintf(sr,"%02X",rx_buffer1[i]);
+            lcd_puts(sr);
+         }
          delay_ms(100);
       }
 }
 
 
 
+// Set Baud Rate of CR038’s UART
+unsigned char mp_init_port(unsigned char baud)  
+{ 
+   // Header 2-bytes
+   putchar1(0xaa);  
+   putchar1(0xbb);
+   
+   // Packet length, 2 bytes, lower byte first. This indicate how many bytes of data there are from Node ID to XOR.    
+   putchar1(0x06); 
+   putchar1(0x00);
+   
+   // Node ID, Serial number of CR038, 2 bytes, lower byte first. 00 00 mean broadcast, it works for any ID.
+   putchar1(0x00);
+   putchar1(0x00);
+   
+   // Function/Command Code, 2 bytes, lower byte first.    
+   putchar1(0x01);
+   putchar1(0x01);
+   
+   // Parameter for Baud rate. 1 byte.
+   //    0 = 4800 bps
+   //    1 = 9600 bps
+   //    2 = 14400 bps
+   //    3 = 19200 bps
+   //    4 = 28800 bps
+   //    5 = 38400 bps
+   //    6 = 57600 bps
+   //    7 = 115200 bps  
+   putchar1(baud);
+   
+   // result of exclusive OR operation from Node ID    
+   putchar1(0x00 ^ baud);
+       
+   packet_complete=0;
+       
+   while(packet_complete==0); // reply packet received successfully
+   
+   // reply packet is stored in rx_buffer1[i] ( i from 0 to (packet_length+3) )              
+   
+   if(rx_buffer1[8]==0x00) // rx_buffer1[8] indicates function/command result: 0 = Success, (Not 0) = Fail. 
+      return 1;
+   else
+      return 0;
+}
 
-
+// Set LED status on CR038
+unsigned char mp_led(unsigned char status)  
+{ 
+   // Header 2-bytes
+   putchar1(0xaa);  
+   putchar1(0xbb);
+   
+   // Packet length, 2 bytes, lower byte first. This indicate how many bytes of data there are from Node ID to XOR.    
+   putchar1(0x06); 
+   putchar1(0x00);
+   
+   // Node ID, Serial number of CR038, 2 bytes, lower byte first. 00 00 mean broadcast, it works for any ID.
+   putchar1(0x00);
+   putchar1(0x00);
+   
+   // Function/Command Code, 2 bytes, lower byte first.    
+   putchar1(0x07);
+   putchar1(0x01);
+   
+   // Parameter for LED status. 1 byte.
+   // 0 = Red LED OFF
+   // 1 to 3 = Red LED ON   
+   putchar1(status);
+   
+   // result of exclusive OR operation from Node ID    
+   putchar1(0x06 ^ status);
+       
+   packet_complete=0;
+       
+   while(packet_complete==0); // reply packet received successfully
+   
+   // reply packet is stored in rx_buffer1[i] ( i from 0 to (packet_length+3) )              
+   
+   if(rx_buffer1[8]==0x00) // rx_buffer1[8] indicates function/command result: 0 = Success, (Not 0) = Fail. 
+      return 1;
+   else
+      return 0;
+}
 
 // Set Antenna status on CR038, needed to access (read or write) to Mifare card.
 // It returns CR038 Node-ID
@@ -206,7 +320,9 @@ unsigned int mp_antenna_sta(unsigned char status)
    putchar1(0x0c);
    putchar1(0x01);
    
-   // Parameter for Antenna status. 1 byte. 0 = Antenna OFF, 1 = Antenna ON    
+   // Parameter for Antenna status. 1 byte.
+   // 0 = Antenna OFF
+   // 1 = Antenna ON    
    putchar1(status);
    
    // result of exclusive OR operation from Node ID    
@@ -224,7 +340,9 @@ unsigned int mp_antenna_sta(unsigned char status)
       return node_id;
    }
    else
-      return 0;       
+      return 0;
+      
+// The Antenna on CR038 will be activated and you can further send command to access the Mifare card.       
 }
 
 // Read Mifare Card type, the Mifare card must be near to CR038 (best is on top) 
@@ -278,7 +396,10 @@ unsigned int mp_request(unsigned char request)
       return card_type;
    }
    else
-      return 0;  
+      return 0;
+
+// The type of Mifare card/tag/transponder will be returned and the cards will wake up. This
+// step is needed before you can access to Mifare card/tag/transponder.  
 }
 
 // Read the NUID of Mifare card/tag/transponder. The Mifare card must be near to
@@ -312,12 +433,264 @@ unsigned char mp_anticoll(unsigned char *NUID)
    
    if(rx_buffer1[8]==0x00) // rx_buffer1[8] indicates function/command result: 0 = Success, (Not 0) = Fail.
    {
-      *(NUID+0)=rx_buffer1[9];
-      *(NUID+1)=rx_buffer1[10];
-      *(NUID+2)=rx_buffer1[11];
-      *(NUID+3)=rx_buffer1[12];  
+      char i=0; 
+      for(i=0;i<4;i++)
+         *(NUID+i)=rx_buffer1[i+9];   
       return 1;
    }
+   else
+      return 0;
+
+// The NUID of Mifare card/tag/transponder will be returned and this ID is needed to select a
+// particular Mifare to access it.
+}
+
+// Select a particular Mifare Card/Tag with the NUID. The Mifare card must be near
+// to CR038 (best is on top). This step is needed if you want to access the Mifare card.
+unsigned char mp_select(unsigned char *NUID)
+{
+   // Header 2-bytes
+   putchar1(0xaa);  
+   putchar1(0xbb);
+    
+   // Packet length, 2 bytes, lower byte first. This indicate how many bytes of data there are from Node ID to XOR.    
+   putchar1(0x09); 
+   putchar1(0x00);
+    
+   // Node ID, Serial number of CR038, 2 bytes, lower byte first. 00 00 mean broadcast, it works for any ID.
+   putchar1(0x00);
+   putchar1(0x00);
+    
+   // Function/Command Code, 2 bytes, lower byte first.    
+   putchar1(0x03);
+   putchar1(0x02);
+    
+   // 4 bytes of NUID you obtain from Mifare Anti-collision, lower byte 1st.    
+   putchar1(*(NUID+0));
+   putchar1(*(NUID+1));
+   putchar1(*(NUID+2));
+   putchar1(*(NUID+3));
+   
+   // result of exclusive OR operation from Node ID    
+   putchar1(0x01 ^ *(NUID+0) ^ *(NUID+1) ^ *(NUID+2) ^ *(NUID+3));
+   
+   packet_complete=0;
+    
+   while(packet_complete==0);
+   
+   // reply packet is stored in rx_buffer1[i] ( i from 0 to (packet_length+3) )              
+   
+   if(rx_buffer1[8]==0x00) // rx_buffer1[8] indicates function/command result: 0 = Success, (Not 0) = Fail.
+   {
+      if(rx_buffer1[9]==0x08) // Select Acknowledge Code (SAK), 0x08 indicate is Mifare Classic 1K
+         return 1;
+      else
+         return 0;
+   }
+   else
+      return 0;
+
+// Now, only that particular Mifare with NUID is activated and all further access will tied to this card.
+}
+
+// To place the selected Mifare Card/Tag in halt mode, to deactivate the card. Once
+// the card is halted, you will need to start from Mifare Request again to activate the card. The
+// Mifare card must be near to CR038 (best is on top).
+unsigned char mp_halt(void)
+{
+   // Header 2-bytes
+   putchar1(0xaa);  
+   putchar1(0xbb);
+    
+   // Packet length, 2 bytes, lower byte first. This indicate how many bytes of data there are from Node ID to XOR.    
+   putchar1(0x05); 
+   putchar1(0x00);
+    
+   // Node ID, Serial number of CR038, 2 bytes, lower byte first. 00 00 mean broadcast, it works for any ID.
+   putchar1(0x00);
+   putchar1(0x00);
+    
+   // Function/Command Code, 2 bytes, lower byte first.    
+   putchar1(0x04);
+   putchar1(0x02);
+    
+   // result of exclusive OR operation from Node ID    
+   putchar1(0x06);
+
+   packet_complete=0;
+    
+   while(packet_complete==0);
+   
+   // reply packet is stored in rx_buffer1[i] ( i from 0 to (packet_length+3) )              
+   
+   if(rx_buffer1[8]==0x00) // rx_buffer1[8] indicates function/command result: 0 = Success, (Not 0) = Fail. 
+      return 1;
+   else
+      return 0;
+
+// Now the selected Mifare card is deactivated and to reactivate, you will need to start the
+// command from Mifare Request.
+}
+
+// To perform authentication with selected Mifare card for memory access. You can
+// select secret Key A or B as authentication password. If a fresh new card from factory, Key
+// A is use for authentication purpose and is hexadecimal FF, FF, FF, FF, FF, FF (6 bytes of
+// 0xFF). You will need to select the particular block for this purpose. It will authenticate for
+// whole sector. Example if you choose the block to be 10, you are actually authenticate for
+// whole sector 2. Access to block 8, 9, 10 and 11(block 11 is sector trailer) will be allowed if
+// the authentication is successful. The selected Mifare card must be near to CR038 (best is on
+// top). There are several steps before you can do authentication, please check the flow.
+unsigned char mp_authentication2(unsigned char keyMode, unsigned char block, unsigned char *key)
+{
+   // Header 2-bytes
+   putchar1(0xaa);  
+   putchar1(0xbb);
+    
+   // Packet length, 2 bytes, lower byte first. This indicate how many bytes of data there are from Node ID to XOR.    
+   putchar1(0x0d); 
+   putchar1(0x00);
+    
+   // Node ID, Serial number of CR038, 2 bytes, lower byte first. 00 00 mean broadcast, it works for any ID.
+   putchar1(0x00);
+   putchar1(0x00);
+    
+   // Function/Command Code, 2 bytes, lower byte first.    
+   putchar1(0x07);
+   putchar1(0x02);
+   
+   // Authentication mode, to select using Key A or Key B for authentication purpose.
+   // 0x60 is to use Key A
+   // 0x61 is to use Key B    
+   putchar1(keyMode);
+   
+   // Authentication block, with the same sector, it will match the sector trailer.   
+   putchar1(block);
+    
+   // Authentication Key, 6 bytes, lower byte 1st. This 6 bytes key must match the Key (A
+   // or B) in the sector trailer on the sector chosen. 
+   putchar1(*(key+0));
+   putchar1(*(key+1));
+   putchar1(*(key+2));
+   putchar1(*(key+3));
+   putchar1(*(key+4));
+   putchar1(*(key+5));
+   
+   // result of exclusive OR operation from Node ID    
+   putchar1(0x05 ^ keyMode ^ block ^ *(key+0) ^ *(key+1) ^ *(key+2) ^ *(key+3) ^ *(key+4) ^ *(key+5));
+   
+   packet_complete=0;
+    
+   while(packet_complete==0);
+   
+   // reply packet is stored in rx_buffer1[i] ( i from 0 to (packet_length+3) )              
+   
+   if(rx_buffer1[8]==0x00) // rx_buffer1[8] indicates function/command result: 0 = Success, (Not 0) = Fail.
+      return 1;
+   else
+      return 0;
+
+// Now the authentication to selected Mifare card is successful and you can access to the blocks
+// in the same sector. In this example, block 8, 9, 10 and 11 are in the same sector. BTW, the
+// access bits do control the mode of access.
+}
+
+// To read the data of certain block (16 bytes) within a sector in the selected Mifare
+// card, authentication must be successful. The selected Mifare card must be near to CR038
+// (best is on top). There are several steps before you can do authentication, please check the
+// flow.
+unsigned char mp_read(unsigned char block, unsigned char *data)
+{
+   // Header 2-bytes
+   putchar1(0xaa);  
+   putchar1(0xbb);
+    
+   // Packet length, 2 bytes, lower byte first. This indicate how many bytes of data there are from Node ID to XOR.    
+   putchar1(0x06); 
+   putchar1(0x00);
+    
+   // Node ID, Serial number of CR038, 2 bytes, lower byte first. 00 00 mean broadcast, it works for any ID.
+   putchar1(0x00);
+   putchar1(0x00);
+    
+   // Function/Command Code, 2 bytes, lower byte first.    
+   putchar1(0x08);
+   putchar1(0x02);
+   
+   // Data block which you want to read.   
+   putchar1(block);
+   
+   // result of exclusive OR operation from Node ID    
+   putchar1(0x0a ^ block);
+   
+   packet_complete=0;
+    
+   while(packet_complete==0);
+   
+   // reply packet is stored in rx_buffer1[i] ( i from 0 to (packet_length+3) )              
+   
+   if(rx_buffer1[8]==0x00) // rx_buffer1[8] indicates function/command result: 0 = Success, (Not 0) = Fail.
+   {
+      char i=0; 
+      for(i=0;i<16;i++)
+         *(data+i)=rx_buffer1[i+9];   
+      return 1;
+   }
+   else
+      return 0;
+}
+
+// To write data into certain block (16 bytes) within a sector in the selected Mifare
+// card, authentication must be successful. The selected Mifare card must be near to CR038
+// (best is on top). There are several steps before you can do authentication, please check the
+// flow.
+unsigned char mp_write(unsigned char block, unsigned char *data)
+{
+   unsigned char data_xor=0;
+   char i=0;
+   
+   // Care should be taken when write data to sector trailer (block 3, 7, 11, 15, 19, 23, 27, 31, 35)
+   // because this block hold the Key A and Key B and most importantly, the Access bits. Wrong
+   // Access bits will lock the sector permanently.
+   if (block==3 || block==7 || block==11 || block==15 || block==19 || block==23 || block==27 || block==31 || block==35)
+      return 0;
+   
+   // Header 2-bytes
+   putchar1(0xaa);  
+   putchar1(0xbb);
+    
+   // Packet length, 2 bytes, lower byte first. This indicate how many bytes of data there are from Node ID to XOR.    
+   putchar1(0x16); 
+   putchar1(0x00);
+    
+   // Node ID, Serial number of CR038, 2 bytes, lower byte first. 00 00 mean broadcast, it works for any ID.
+   putchar1(0x00);
+   putchar1(0x00);
+    
+   // Function/Command Code, 2 bytes, lower byte first.    
+   putchar1(0x09);
+   putchar1(0x02);
+   
+   // Data block which you want to write.   
+   putchar1(block);
+   
+   // This is the 16 bytes of data needed for the CR038 to write into the Mifare card. 
+   for(i=0;i<16;i++)
+   {
+      putchar1(*(data+i));
+      data_xor ^= *(data+i);   
+   }
+   
+   // result of exclusive OR operation from Node ID    
+   putchar1(0x0b ^ block ^ data_xor);
+   
+   packet_complete=0;
+    
+   while(packet_complete==0);
+   
+   // reply packet is stored in rx_buffer1[i] ( i from 0 to (packet_length+3) )              
+   
+   if(rx_buffer1[8]==0x00) // rx_buffer1[8] indicates function/command result: 0 = Success, (Not 0) = Fail. 
+      return 1;
    else
       return 0;
 }
@@ -484,8 +857,16 @@ EICRB=(0<<ISC71) | (0<<ISC70) | (0<<ISC61) | (0<<ISC60) | (0<<ISC51) | (0<<ISC50
 EIMSK=(0<<INT7) | (0<<INT6) | (0<<INT5) | (0<<INT4) | (0<<INT3) | (0<<INT2) | (0<<INT1) | (0<<INT0);
 
 // USART0 initialization
-// USART0 disabled
-UCSR0B=(0<<RXCIE0) | (0<<TXCIE0) | (0<<UDRIE0) | (0<<RXEN0) | (0<<TXEN0) | (0<<UCSZ02) | (0<<RXB80) | (0<<TXB80);
+// Communication Parameters: 8 Data, 1 Stop, No Parity
+// USART0 Receiver: On
+// USART0 Transmitter: On
+// USART0 Mode: Asynchronous
+// USART0 Baud Rate: 9600
+UCSR0A=(0<<RXC0) | (0<<TXC0) | (0<<UDRE0) | (0<<FE0) | (0<<DOR0) | (0<<UPE0) | (0<<U2X0) | (0<<MPCM0);
+UCSR0B=(0<<RXCIE0) | (0<<TXCIE0) | (0<<UDRIE0) | (1<<RXEN0) | (1<<TXEN0) | (0<<UCSZ02) | (0<<RXB80) | (0<<TXB80);
+UCSR0C=(0<<UMSEL0) | (0<<UPM01) | (0<<UPM00) | (0<<USBS0) | (1<<UCSZ01) | (1<<UCSZ00) | (0<<UCPOL0);
+UBRR0H=0x00;
+UBRR0L=0x33;
 
 // USART1 initialization
 // Communication Parameters: 8 Data, 1 Stop, No Parity
