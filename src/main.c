@@ -6,12 +6,12 @@ Automatic Program Generator
 http://www.hpinfotech.com
 
 Project : Mifare Card Reader CR038 (YLMF18)
-Version : 2.0.1
+Version : 2.6.0
 Date    : 1393 Bahman 13
 Author  : Meysam Pavizi
 Company : 
 Comments: This Program is able to understand successful commands, read NUID of card
-          and read and write data
+          and read and write data. with TIMEOUT BASED ERROR DETECTION
 
 
 Chip type               : ATmega128A
@@ -55,109 +55,6 @@ bit packet_complete=0;
 #define FRAMING_ERROR (1<<FE0)
 #define PARITY_ERROR (1<<UPE0)
 #define DATA_OVERRUN (1<<DOR0)
-
-// USART0 Receiver buffer
-#define RX_BUFFER_SIZE0 40
-char rx_buffer0[RX_BUFFER_SIZE0];
-
-#if RX_BUFFER_SIZE0 <= 256
-unsigned char rx_wr_index0=0,rx_rd_index0=0;
-#else
-unsigned int rx_wr_index0=0,rx_rd_index0=0;
-#endif
-
-#if RX_BUFFER_SIZE0 < 256
-unsigned char rx_counter0=0;
-#else
-unsigned int rx_counter0=0;
-#endif
-
-// This flag is set on USART0 Receiver buffer overflow
-bit rx_buffer_overflow0;
-
-// USART0 Receiver interrupt service routine
-interrupt [USART0_RXC] void usart0_rx_isr(void)
-{
-char status,data;
-status=UCSR0A;
-data=UDR0;
-
-static char byte_mode=0;
-
-if ((status & (FRAMING_ERROR | PARITY_ERROR | DATA_OVERRUN))==0)
-   {
-
-   if (data==0xaa) // AA received.
-      {
-         rx_wr_index0=0;
-         rx_counter0=0;
-         packet_xor=0;
-         byte_mode=1;
-      }   
-   else if (byte_mode==1 && data==0xbb) // AA BB received. The reply from CR038 started
-      {
-         p_length[0]=0;
-         p_length[1]=0;
-         byte_mode=2;
-      }   
-   else if (byte_mode==2) // get the Length of Node ID to XOR, Lower Byte
-      {
-         p_length[0]=data;
-         byte_mode=3;
-      }
-   else if (byte_mode==3) // get the Length of Node ID to XOR, Higher Byte   
-      {
-         p_length[1]=data;
-         packet_length=(p_length[1]<<8)|p_length[0];
-         byte_mode=4;
-      }   
-   else if (byte_mode==4)
-      {
-         if ((rx_wr_index0-2)<=packet_length)
-         {
-            packet_xor^=data;
-         } 
-         else if (rx_wr_index0==packet_length+3 && data==packet_xor) // compare XOR bytes
-         {
-            packet_complete=1; // packet received successfully
-         }    
-      }
-   
-   rx_buffer0[rx_wr_index0++]=data;
-#if RX_BUFFER_SIZE0 == 256
-   // special case for receiver buffer size=256
-   if (++rx_counter0 == 0) rx_buffer_overflow0=1;
-#else
-   if (rx_wr_index0 == RX_BUFFER_SIZE0) rx_wr_index0=0;
-   if (++rx_counter0 == RX_BUFFER_SIZE0)
-      {
-      rx_counter0=0;
-      rx_buffer_overflow0=1;
-      }
-#endif
-
-   }
-}
-
-#ifndef _DEBUG_TERMINAL_IO_
-// Get a character from the USART0 Receiver buffer
-#define _ALTERNATE_GETCHAR_
-#pragma used+
-char getchar(void)
-{
-char data;
-while (rx_counter0==0);
-data=rx_buffer0[rx_rd_index0++];
-#if RX_BUFFER_SIZE0 != 256
-if (rx_rd_index0 == RX_BUFFER_SIZE0) rx_rd_index0=0;
-#endif
-#asm("cli")
---rx_counter0;
-#asm("sei")
-return data;
-}
-#pragma used-
-#endif
 
 // USART1 Receiver buffer
 #define RX_BUFFER_SIZE1 40
@@ -245,29 +142,63 @@ if ((status & (FRAMING_ERROR | PARITY_ERROR | DATA_OVERRUN))==0)
 // Timer 0 overflow interrupt service routine
 interrupt [TIM0_OVF] void timer0_ovf_isr(void)
 {
-// Place your code here
 
+// If a command sent (from host to CR038) and there is no reply from CR038
+// after 100ms, it is consider this command failed.
+static unsigned char packet_time=0;
+packet_time++;
+if (packet_time>25) // Timer Period is 4.096 ms. 25*4ms=100ms
+{
+   packet_timeout=1;
+   packet_time=0;
+}
+   
 }
 
 void main(void)
 {
 // Declare your local variables here
-
+unsigned char nuid[4];
+unsigned char key[6]={0xff,0xff,0xff,0xff,0xff,0xff};
+unsigned char data[16];
+int nodeid=0;
 init();
 
-//mp_request();
-//mp_anticoll();
+// stop timer0
+TCCR0=0;
+delay_ms(1000); // to prevent CR038 crash
+//mp_init_port(3);
+//mp_led(3);
+
+//mp_select(nuid);
+////mp_halt();
+//mp_authentication2(0x60,0x01,key);
+//mp_read(0x01,data);
+//mp_write(0x01,data);
+
 while (1)
       {
-      char a;
-      char str[16];
-      
-      //a=getchar();
-      putchar('a');
-      delay_ms(100);
-      lcd_clear();
-      //sprintf(str,"%d",a);
-      lcd_puts("mp");
+      // Place your code here
+         char i=0;
+         unsigned char sr[16];
+         
+         nodeid=mp_antenna(1);
+         if (nodeid)
+            if (mp_request(0x52))
+               if (mp_anticoll(nuid))
+         {
+
+         lcd_clear();
+         sprintf(sr,"%04X: ",nodeid);
+         lcd_puts(sr);
+         for(i=0;i<4;i++)
+         {
+            sprintf(sr,"%02X",nuid[i]);
+            lcd_puts(sr);
+         }
+         
+         }
+         delay_ms(100);
       }
 }
 
@@ -277,20 +208,20 @@ while (1)
 unsigned char mp_init_port(unsigned char baud)  
 { 
    // Header 2-bytes
-   putchar(0xaa);  
-   putchar(0xbb);
+   putchar1(0xaa);  
+   putchar1(0xbb);
    
    // Packet length, 2 bytes, lower byte first. This indicate how many bytes of data there are from Node ID to XOR.    
-   putchar(0x06); 
-   putchar(0x00);
+   putchar1(0x06); 
+   putchar1(0x00);
    
    // Node ID, Serial number of CR038, 2 bytes, lower byte first. 00 00 mean broadcast, it works for any ID.
-   putchar(0x00);
-   putchar(0x00);
+   putchar1(0x00);
+   putchar1(0x00);
    
    // Function/Command Code, 2 bytes, lower byte first.    
-   putchar(0x01);
-   putchar(0x01);
+   putchar1(0x01);
+   putchar1(0x01);
    
    // Parameter for Baud rate. 1 byte.
    //    0 = 4800 bps
@@ -301,18 +232,30 @@ unsigned char mp_init_port(unsigned char baud)
    //    5 = 38400 bps
    //    6 = 57600 bps
    //    7 = 115200 bps  
-   putchar(baud);
+   putchar1(baud);
    
    // result of exclusive OR operation from Node ID    
-   putchar(0x00 ^ baud);
+   putchar1(0x00 ^ baud);
        
    packet_complete=0;
-       
-   while(packet_complete==0); // reply packet received successfully
    
-   // reply packet is stored in rx_buffer[i] ( i from 0 to (packet_length+3) )              
+   // start timer0
+   packet_timeout=0;
+   TCCR0=(0<<WGM00) | (0<<COM01) | (0<<COM00) | (0<<WGM01) | (1<<CS02) | (0<<CS01) | (1<<CS00);
+    
+   while(packet_complete==0) // reply packet received successfully
+   {
+      if (packet_timeout==1) // if there was no reply after 100ms
+      {
+         // stop timer0
+         TCCR0=0;
+         return 0;
+      }
+   } // reply packet received successfully
    
-   if(rx_buffer0[8]==0x00) // rx_buffer[8] indicates function/command result: 0 = Success, (Not 0) = Fail. 
+   // reply packet is stored in rx_buffer1[i] ( i from 0 to (packet_length+3) )              
+   
+   if(rx_buffer1[8]==0x00) // rx_buffer1[8] indicates function/command result: 0 = Success, (Not 0) = Fail. 
       return 1;
    else
       return 0;
@@ -322,36 +265,48 @@ unsigned char mp_init_port(unsigned char baud)
 unsigned char mp_led(unsigned char status)  
 { 
    // Header 2-bytes
-   putchar(0xaa);  
-   putchar(0xbb);
+   putchar1(0xaa);  
+   putchar1(0xbb);
    
    // Packet length, 2 bytes, lower byte first. This indicate how many bytes of data there are from Node ID to XOR.    
-   putchar(0x06); 
-   putchar(0x00);
+   putchar1(0x06); 
+   putchar1(0x00);
    
    // Node ID, Serial number of CR038, 2 bytes, lower byte first. 00 00 mean broadcast, it works for any ID.
-   putchar(0x00);
-   putchar(0x00);
+   putchar1(0x00);
+   putchar1(0x00);
    
    // Function/Command Code, 2 bytes, lower byte first.    
-   putchar(0x07);
-   putchar(0x01);
+   putchar1(0x07);
+   putchar1(0x01);
    
    // Parameter for LED status. 1 byte.
    // 0 = Red LED OFF
    // 1 to 3 = Red LED ON   
-   putchar(status);
+   putchar1(status);
    
    // result of exclusive OR operation from Node ID    
-   putchar(0x06 ^ status);
+   putchar1(0x06 ^ status);
        
    packet_complete=0;
        
-   while(packet_complete==0); // reply packet received successfully
+   // start timer0
+   packet_timeout=0;
+   TCCR0=(0<<WGM00) | (0<<COM01) | (0<<COM00) | (0<<WGM01) | (1<<CS02) | (0<<CS01) | (1<<CS00);
+    
+   while(packet_complete==0) // reply packet received successfully
+   {
+      if (packet_timeout==1) // if there was no reply after 100ms
+      {
+         // stop timer0
+         TCCR0=0;
+         return 0;
+      }
+   } // reply packet received successfully
    
-   // reply packet is stored in rx_buffer[i] ( i from 0 to (packet_length+3) )              
+   // reply packet is stored in rx_buffer1[i] ( i from 0 to (packet_length+3) )              
    
-   if(rx_buffer0[8]==0x00) // rx_buffer[8] indicates function/command result: 0 = Success, (Not 0) = Fail. 
+   if(rx_buffer1[8]==0x00) // rx_buffer1[8] indicates function/command result: 0 = Success, (Not 0) = Fail. 
       return 1;
    else
       return 0;
@@ -364,38 +319,50 @@ unsigned int mp_antenna(unsigned char status)
    unsigned int node_id=0;
    
    // Header 2-bytes
-   putchar(0xaa);  
-   putchar(0xbb);
+   putchar1(0xaa);  
+   putchar1(0xbb);
    
    // Packet length, 2 bytes, lower byte first. This indicate how many bytes of data there are from Node ID to XOR.    
-   putchar(0x06); 
-   putchar(0x00);
+   putchar1(0x06); 
+   putchar1(0x00);
    
    // Node ID, Serial number of CR038, 2 bytes, lower byte first. 00 00 mean broadcast, it works for any ID.
-   putchar(0x00);
-   putchar(0x00);
+   putchar1(0x00);
+   putchar1(0x00);
    
    // Function/Command Code, 2 bytes, lower byte first.    
-   putchar(0x0c);
-   putchar(0x01);
+   putchar1(0x0c);
+   putchar1(0x01);
    
    // Parameter for Antenna status. 1 byte.
    // 0 = Antenna OFF
    // 1 = Antenna ON    
-   putchar(status);
+   putchar1(status);
    
    // result of exclusive OR operation from Node ID    
-   putchar(0x0d ^ status);
+   putchar1(0x0d ^ status);
        
    packet_complete=0;
        
-   while(packet_complete==0); // reply packet received successfully
+   // start timer0
+   packet_timeout=0;
+   TCCR0=(0<<WGM00) | (0<<COM01) | (0<<COM00) | (0<<WGM01) | (1<<CS02) | (0<<CS01) | (1<<CS00);
+    
+   while(packet_complete==0) // reply packet received successfully
+   {
+      if (packet_timeout==1) // if there was no reply after 100ms
+      {
+         // stop timer0
+         TCCR0=0;
+         return 0;
+      }
+   } // reply packet received successfully
    
-   // reply packet is stored in rx_buffer[i] ( i from 0 to (packet_length+3) )              
+   // reply packet is stored in rx_buffer1[i] ( i from 0 to (packet_length+3) )              
    
-   if(rx_buffer0[8]==0x00) // rx_buffer[8] indicates function/command result: 0 = Success, (Not 0) = Fail.
+   if(rx_buffer1[8]==0x00) // rx_buffer1[8] indicates function/command result: 0 = Success, (Not 0) = Fail.
    {  
-      node_id=(rx_buffer0[5]<<8)|rx_buffer0[4]; // get the Node-ID
+      node_id=(rx_buffer1[5]<<8)|rx_buffer1[4]; // get the Node-ID
       return node_id;
    }
    else
@@ -420,38 +387,50 @@ unsigned int mp_request(unsigned char request)
    unsigned int card_type=0;
       
    // Header 2-bytes
-   putchar(0xaa);  
-   putchar(0xbb);
+   putchar1(0xaa);  
+   putchar1(0xbb);
        
    // Packet length, 2 bytes, lower byte first. This indicate how many bytes of data there are from Node ID to XOR.    
-   putchar(0x06); 
-   putchar(0x00);
+   putchar1(0x06); 
+   putchar1(0x00);
        
    // Node ID, Serial number of CR038, 2 bytes, lower byte first. 00 00 mean broadcast, it works for any ID.
-   putchar(0x00);
-   putchar(0x00);
+   putchar1(0x00);
+   putchar1(0x00);
        
    // Function/Command Code, 2 bytes, lower byte first.    
-   putchar(0x01);
-   putchar(0x02);
+   putchar1(0x01);
+   putchar1(0x02);
     
    // Request Mifare Card type code. 1 byte.
    // 0x52 = Request all Type A card in the reading range
    // 0x26 = Request all idle card   
-   putchar(request);
+   putchar1(request);
        
    // result of exclusive OR operation from Node ID    
-   putchar(0x03 ^ request);
+   putchar1(0x03 ^ request);
        
    packet_complete=0;
        
-   while(packet_complete==0);
+   // start timer0
+   packet_timeout=0;
+   TCCR0=(0<<WGM00) | (0<<COM01) | (0<<COM00) | (0<<WGM01) | (1<<CS02) | (0<<CS01) | (1<<CS00);
+    
+   while(packet_complete==0) // reply packet received successfully
+   {
+      if (packet_timeout==1) // if there was no reply after 100ms
+      {
+         // stop timer0
+         TCCR0=0;
+         return 0;
+      }
+   } // reply packet received successfully
    
-   // reply packet is stored in rx_buffer[i] ( i from 0 to (packet_length+3) )              
+   // reply packet is stored in rx_buffer1[i] ( i from 0 to (packet_length+3) )              
    
-   if(rx_buffer0[8]==0x00) // rx_buffer[8] indicates function/command result: 0 = Success, (Not 0) = Fail.
+   if(rx_buffer1[8]==0x00) // rx_buffer1[8] indicates function/command result: 0 = Success, (Not 0) = Fail.
    {  
-      card_type=(rx_buffer0[10]<<8)|rx_buffer0[9]; // get the Mifare card type
+      card_type=(rx_buffer1[10]<<8)|rx_buffer1[9]; // get the Mifare card type
       return card_type;
    }
    else
@@ -466,35 +445,47 @@ unsigned int mp_request(unsigned char request)
 unsigned char mp_anticoll(unsigned char *NUID)
 {
    // Header 2-bytes
-   putchar(0xaa);  
-   putchar(0xbb);
+   putchar1(0xaa);  
+   putchar1(0xbb);
     
    // Packet length, 2 bytes, lower byte first. This indicate how many bytes of data there are from Node ID to XOR.    
-   putchar(0x05); 
-   putchar(0x00);
+   putchar1(0x05); 
+   putchar1(0x00);
     
    // Node ID, Serial number of CR038, 2 bytes, lower byte first. 00 00 mean broadcast, it works for any ID.
-   putchar(0x00);
-   putchar(0x00);
+   putchar1(0x00);
+   putchar1(0x00);
     
    // Function/Command Code, 2 bytes, lower byte first.    
-   putchar(0x02);
-   putchar(0x02);
+   putchar1(0x02);
+   putchar1(0x02);
     
    // result of exclusive OR operation from Node ID    
-   putchar(0x00);
+   putchar1(0x00);
 
    packet_complete=0;
     
-   while(packet_complete==0);
+   // start timer0
+   packet_timeout=0;
+   TCCR0=(0<<WGM00) | (0<<COM01) | (0<<COM00) | (0<<WGM01) | (1<<CS02) | (0<<CS01) | (1<<CS00);
+    
+   while(packet_complete==0) // reply packet received successfully
+   {
+      if (packet_timeout==1) // if there was no reply after 100ms
+      {
+         // stop timer0
+         TCCR0=0;
+         return 0;
+      }
+   } // reply packet received successfully
    
-   // reply packet is stored in rx_buffer[i] ( i from 0 to (packet_length+3) )              
+   // reply packet is stored in rx_buffer1[i] ( i from 0 to (packet_length+3) )              
    
-   if(rx_buffer0[8]==0x00) // rx_buffer[8] indicates function/command result: 0 = Success, (Not 0) = Fail.
+   if(rx_buffer1[8]==0x00) // rx_buffer1[8] indicates function/command result: 0 = Success, (Not 0) = Fail.
    {
       char i=0; 
       for(i=0;i<4;i++)
-         *(NUID+i)=rx_buffer0[i+9];   
+         *(NUID+i)=rx_buffer1[i+9];   
       return 1;
    }
    else
@@ -509,39 +500,51 @@ unsigned char mp_anticoll(unsigned char *NUID)
 unsigned char mp_select(unsigned char *NUID)
 {
    // Header 2-bytes
-   putchar(0xaa);  
-   putchar(0xbb);
+   putchar1(0xaa);  
+   putchar1(0xbb);
     
    // Packet length, 2 bytes, lower byte first. This indicate how many bytes of data there are from Node ID to XOR.    
-   putchar(0x09); 
-   putchar(0x00);
+   putchar1(0x09); 
+   putchar1(0x00);
     
    // Node ID, Serial number of CR038, 2 bytes, lower byte first. 00 00 mean broadcast, it works for any ID.
-   putchar(0x00);
-   putchar(0x00);
+   putchar1(0x00);
+   putchar1(0x00);
     
    // Function/Command Code, 2 bytes, lower byte first.    
-   putchar(0x03);
-   putchar(0x02);
+   putchar1(0x03);
+   putchar1(0x02);
     
    // 4 bytes of NUID you obtain from Mifare Anti-collision, lower byte 1st.    
-   putchar(*(NUID+0));
-   putchar(*(NUID+1));
-   putchar(*(NUID+2));
-   putchar(*(NUID+3));
+   putchar1(*(NUID+0));
+   putchar1(*(NUID+1));
+   putchar1(*(NUID+2));
+   putchar1(*(NUID+3));
    
    // result of exclusive OR operation from Node ID    
-   putchar(0x01 ^ *(NUID+0) ^ *(NUID+1) ^ *(NUID+2) ^ *(NUID+3));
+   putchar1(0x01 ^ *(NUID+0) ^ *(NUID+1) ^ *(NUID+2) ^ *(NUID+3));
    
    packet_complete=0;
     
-   while(packet_complete==0);
-   
-   // reply packet is stored in rx_buffer[i] ( i from 0 to (packet_length+3) )              
-   
-   if(rx_buffer0[8]==0x00) // rx_buffer[8] indicates function/command result: 0 = Success, (Not 0) = Fail.
+   // start timer0
+   packet_timeout=0;
+   TCCR0=(0<<WGM00) | (0<<COM01) | (0<<COM00) | (0<<WGM01) | (1<<CS02) | (0<<CS01) | (1<<CS00);
+    
+   while(packet_complete==0) // reply packet received successfully
    {
-      if(rx_buffer0[9]==0x08) // Select Acknowledge Code (SAK), 0x08 indicate is Mifare Classic 1K
+      if (packet_timeout==1) // if there was no reply after 100ms
+      {
+         // stop timer0
+         TCCR0=0;
+         return 0;
+      }
+   } // reply packet received successfully
+   
+   // reply packet is stored in rx_buffer1[i] ( i from 0 to (packet_length+3) )              
+   
+   if(rx_buffer1[8]==0x00) // rx_buffer1[8] indicates function/command result: 0 = Success, (Not 0) = Fail.
+   {
+      if(rx_buffer1[9]==0x08) // Select Acknowledge Code (SAK), 0x08 indicate is Mifare Classic 1K
          return 1;
       else
          return 0;
@@ -558,31 +561,43 @@ unsigned char mp_select(unsigned char *NUID)
 unsigned char mp_halt(void)
 {
    // Header 2-bytes
-   putchar(0xaa);  
-   putchar(0xbb);
+   putchar1(0xaa);  
+   putchar1(0xbb);
     
    // Packet length, 2 bytes, lower byte first. This indicate how many bytes of data there are from Node ID to XOR.    
-   putchar(0x05); 
-   putchar(0x00);
+   putchar1(0x05); 
+   putchar1(0x00);
     
    // Node ID, Serial number of CR038, 2 bytes, lower byte first. 00 00 mean broadcast, it works for any ID.
-   putchar(0x00);
-   putchar(0x00);
+   putchar1(0x00);
+   putchar1(0x00);
     
    // Function/Command Code, 2 bytes, lower byte first.    
-   putchar(0x04);
-   putchar(0x02);
+   putchar1(0x04);
+   putchar1(0x02);
     
    // result of exclusive OR operation from Node ID    
-   putchar(0x06);
+   putchar1(0x06);
 
    packet_complete=0;
     
-   while(packet_complete==0);
+   // start timer0
+   packet_timeout=0;
+   TCCR0=(0<<WGM00) | (0<<COM01) | (0<<COM00) | (0<<WGM01) | (1<<CS02) | (0<<CS01) | (1<<CS00);
+    
+   while(packet_complete==0) // reply packet received successfully
+   {
+      if (packet_timeout==1) // if there was no reply after 100ms
+      {
+         // stop timer0
+         TCCR0=0;
+         return 0;
+      }
+   } // reply packet received successfully
    
-   // reply packet is stored in rx_buffer[i] ( i from 0 to (packet_length+3) )              
+   // reply packet is stored in rx_buffer1[i] ( i from 0 to (packet_length+3) )              
    
-   if(rx_buffer0[8]==0x00) // rx_buffer[8] indicates function/command result: 0 = Success, (Not 0) = Fail. 
+   if(rx_buffer1[8]==0x00) // rx_buffer1[8] indicates function/command result: 0 = Success, (Not 0) = Fail. 
       return 1;
    else
       return 0;
@@ -602,48 +617,60 @@ unsigned char mp_halt(void)
 unsigned char mp_authentication2(unsigned char keyMode, unsigned char block, unsigned char *key)
 {
    // Header 2-bytes
-   putchar(0xaa);  
-   putchar(0xbb);
+   putchar1(0xaa);  
+   putchar1(0xbb);
     
    // Packet length, 2 bytes, lower byte first. This indicate how many bytes of data there are from Node ID to XOR.    
-   putchar(0x0d); 
-   putchar(0x00);
+   putchar1(0x0d); 
+   putchar1(0x00);
     
    // Node ID, Serial number of CR038, 2 bytes, lower byte first. 00 00 mean broadcast, it works for any ID.
-   putchar(0x00);
-   putchar(0x00);
+   putchar1(0x00);
+   putchar1(0x00);
     
    // Function/Command Code, 2 bytes, lower byte first.    
-   putchar(0x07);
-   putchar(0x02);
+   putchar1(0x07);
+   putchar1(0x02);
    
    // Authentication mode, to select using Key A or Key B for authentication purpose.
    // 0x60 is to use Key A
    // 0x61 is to use Key B    
-   putchar(keyMode);
+   putchar1(keyMode);
    
    // Authentication block, with the same sector, it will match the sector trailer.   
-   putchar(block);
+   putchar1(block);
     
    // Authentication Key, 6 bytes, lower byte 1st. This 6 bytes key must match the Key (A
    // or B) in the sector trailer on the sector chosen. 
-   putchar(*(key+0));
-   putchar(*(key+1));
-   putchar(*(key+2));
-   putchar(*(key+3));
-   putchar(*(key+4));
-   putchar(*(key+5));
+   putchar1(*(key+0));
+   putchar1(*(key+1));
+   putchar1(*(key+2));
+   putchar1(*(key+3));
+   putchar1(*(key+4));
+   putchar1(*(key+5));
    
    // result of exclusive OR operation from Node ID    
-   putchar(0x05 ^ keyMode ^ block ^ *(key+0) ^ *(key+1) ^ *(key+2) ^ *(key+3) ^ *(key+4) ^ *(key+5));
+   putchar1(0x05 ^ keyMode ^ block ^ *(key+0) ^ *(key+1) ^ *(key+2) ^ *(key+3) ^ *(key+4) ^ *(key+5));
    
    packet_complete=0;
     
-   while(packet_complete==0);
+   // start timer0
+   packet_timeout=0;
+   TCCR0=(0<<WGM00) | (0<<COM01) | (0<<COM00) | (0<<WGM01) | (1<<CS02) | (0<<CS01) | (1<<CS00);
+    
+   while(packet_complete==0) // reply packet received successfully
+   {
+      if (packet_timeout==1) // if there was no reply after 100ms
+      {
+         // stop timer0
+         TCCR0=0;
+         return 0;
+      }
+   } // reply packet received successfully
    
-   // reply packet is stored in rx_buffer[i] ( i from 0 to (packet_length+3) )              
+   // reply packet is stored in rx_buffer1[i] ( i from 0 to (packet_length+3) )              
    
-   if(rx_buffer0[8]==0x00) // rx_buffer[8] indicates function/command result: 0 = Success, (Not 0) = Fail.
+   if(rx_buffer1[8]==0x00) // rx_buffer1[8] indicates function/command result: 0 = Success, (Not 0) = Fail.
       return 1;
    else
       return 0;
@@ -660,38 +687,50 @@ unsigned char mp_authentication2(unsigned char keyMode, unsigned char block, uns
 unsigned char mp_read(unsigned char block, unsigned char *data)
 {
    // Header 2-bytes
-   putchar(0xaa);  
-   putchar(0xbb);
+   putchar1(0xaa);  
+   putchar1(0xbb);
     
    // Packet length, 2 bytes, lower byte first. This indicate how many bytes of data there are from Node ID to XOR.    
-   putchar(0x06); 
-   putchar(0x00);
+   putchar1(0x06); 
+   putchar1(0x00);
     
    // Node ID, Serial number of CR038, 2 bytes, lower byte first. 00 00 mean broadcast, it works for any ID.
-   putchar(0x00);
-   putchar(0x00);
+   putchar1(0x00);
+   putchar1(0x00);
     
    // Function/Command Code, 2 bytes, lower byte first.    
-   putchar(0x08);
-   putchar(0x02);
+   putchar1(0x08);
+   putchar1(0x02);
    
    // Data block which you want to read.   
-   putchar(block);
+   putchar1(block);
    
    // result of exclusive OR operation from Node ID    
-   putchar(0x0a ^ block);
+   putchar1(0x0a ^ block);
    
    packet_complete=0;
     
-   while(packet_complete==0);
+   // start timer0
+   packet_timeout=0;
+   TCCR0=(0<<WGM00) | (0<<COM01) | (0<<COM00) | (0<<WGM01) | (1<<CS02) | (0<<CS01) | (1<<CS00);
+    
+   while(packet_complete==0) // reply packet received successfully
+   {
+      if (packet_timeout==1) // if there was no reply after 100ms
+      {
+         // stop timer0
+         TCCR0=0;
+         return 0;
+      }
+   } // reply packet received successfully
    
-   // reply packet is stored in rx_buffer[i] ( i from 0 to (packet_length+3) )              
+   // reply packet is stored in rx_buffer1[i] ( i from 0 to (packet_length+3) )              
    
-   if(rx_buffer0[8]==0x00) // rx_buffer[8] indicates function/command result: 0 = Success, (Not 0) = Fail.
+   if(rx_buffer1[8]==0x00) // rx_buffer1[8] indicates function/command result: 0 = Success, (Not 0) = Fail.
    {
       char i=0; 
       for(i=0;i<16;i++)
-         *(data+i)=rx_buffer0[i+9];   
+         *(data+i)=rx_buffer1[i+9];   
       return 1;
    }
    else
@@ -714,41 +753,53 @@ unsigned char mp_write(unsigned char block, unsigned char *data)
       return 0;
    
    // Header 2-bytes
-   putchar(0xaa);  
-   putchar(0xbb);
+   putchar1(0xaa);  
+   putchar1(0xbb);
     
    // Packet length, 2 bytes, lower byte first. This indicate how many bytes of data there are from Node ID to XOR.    
-   putchar(0x16); 
-   putchar(0x00);
+   putchar1(0x16); 
+   putchar1(0x00);
     
    // Node ID, Serial number of CR038, 2 bytes, lower byte first. 00 00 mean broadcast, it works for any ID.
-   putchar(0x00);
-   putchar(0x00);
+   putchar1(0x00);
+   putchar1(0x00);
     
    // Function/Command Code, 2 bytes, lower byte first.    
-   putchar(0x09);
-   putchar(0x02);
+   putchar1(0x09);
+   putchar1(0x02);
    
    // Data block which you want to write.   
-   putchar(block);
+   putchar1(block);
    
    // This is the 16 bytes of data needed for the CR038 to write into the Mifare card. 
    for(i=0;i<16;i++)
    {
-      putchar(*(data+i));
+      putchar1(*(data+i));
       data_xor ^= *(data+i);   
    }
    
    // result of exclusive OR operation from Node ID    
-   putchar(0x0b ^ block ^ data_xor);
+   putchar1(0x0b ^ block ^ data_xor);
    
    packet_complete=0;
     
-   while(packet_complete==0);
+   // start timer0
+   packet_timeout=0;
+   TCCR0=(0<<WGM00) | (0<<COM01) | (0<<COM00) | (0<<WGM01) | (1<<CS02) | (0<<CS01) | (1<<CS00);
+    
+   while(packet_complete==0) // reply packet received successfully
+   {
+      if (packet_timeout==1) // if there was no reply after 100ms
+      {
+         // stop timer0
+         TCCR0=0;
+         return 0;
+      }
+   } // reply packet received successfully
    
-   // reply packet is stored in rx_buffer[i] ( i from 0 to (packet_length+3) )              
+   // reply packet is stored in rx_buffer1[i] ( i from 0 to (packet_length+3) )              
    
-   if(rx_buffer0[8]==0x00) // rx_buffer[8] indicates function/command result: 0 = Success, (Not 0) = Fail. 
+   if(rx_buffer1[8]==0x00) // rx_buffer1[8] indicates function/command result: 0 = Success, (Not 0) = Fail. 
       return 1;
    else
       return 0;
@@ -920,12 +971,12 @@ EIMSK=(0<<INT7) | (0<<INT6) | (0<<INT5) | (0<<INT4) | (0<<INT3) | (0<<INT2) | (0
 // USART0 Receiver: On
 // USART0 Transmitter: On
 // USART0 Mode: Asynchronous
-// USART0 Baud Rate: 19200
+// USART0 Baud Rate: 9600
 UCSR0A=(0<<RXC0) | (0<<TXC0) | (0<<UDRE0) | (0<<FE0) | (0<<DOR0) | (0<<UPE0) | (0<<U2X0) | (0<<MPCM0);
-UCSR0B=(1<<RXCIE0) | (0<<TXCIE0) | (0<<UDRIE0) | (1<<RXEN0) | (1<<TXEN0) | (0<<UCSZ02) | (0<<RXB80) | (0<<TXB80);
+UCSR0B=(0<<RXCIE0) | (0<<TXCIE0) | (0<<UDRIE0) | (1<<RXEN0) | (1<<TXEN0) | (0<<UCSZ02) | (0<<RXB80) | (0<<TXB80);
 UCSR0C=(0<<UMSEL0) | (0<<UPM01) | (0<<UPM00) | (0<<USBS0) | (1<<UCSZ01) | (1<<UCSZ00) | (0<<UCPOL0);
 UBRR0H=0x00;
-UBRR0L=0x19;
+UBRR0L=0x33;
 
 // USART1 initialization
 // Communication Parameters: 8 Data, 1 Stop, No Parity
