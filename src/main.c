@@ -27,7 +27,6 @@ Data Stack size         : 1024
 #include <stdio.h>
 // Alphanumeric LCD functions
 #include <alcd.h>
-#include <string.h>
 
 // Declare your global variables here
 void putchar1(char c);
@@ -253,120 +252,22 @@ interrupt [TIM0_OVF] void timer0_ovf_isr(void)
 void main(void)
 {
 // Declare your local variables here
-char b[3] ={'A','T','0'-35};
-char y3[8] ={'A','T','+','C','M','G','S','='};
-char y4[8] ={'"','0','9','1','2','7','4','2'};
-char y5[6] = {'4','0','7','1','"','0'-35};
-char y6[6] ={'M','I','C','R','O','0'-22};
-char z1,z2,z3,z4; 
 
 init();
 
+//mp_request();
+//mp_anticoll();
 while (1)
       {
-      // Place your code here
-         char i=0;
-         char sr[2];
-         char smsid[8];
-         unsigned char nuid[4];
-
-         if ( mp_antenna(1) )
-            if ( mp_request(0x52) )
-            {
-               mp_anticoll(nuid);
-               lcd_clear();
-               lcd_puts("NUID: ");
-
-               for(i=0;i<=3;i++)
-               {
-                  sprintf(sr,"%02X",nuid[i]);
-                  //lcd_puts(sr);
-                  smsid[2*i]=sr[0];
-                  smsid[2*i+1]=sr[1];
-               }
-               
-               for(i=0;i<=7;i++)
-               {
-                  lcd_putchar(smsid[i]);  
-               }
-
-               
-               //******************************************************
-                   for(i=0;i<=2;i++)
-                   {
-                     putchar1(b[i]);
-                    // delay_ms(10);
-                    
-                   }
-                   //putchar1('\n');
-                   lcd_gotoxy(0,0);
-                   lcd_putsf("on");
-                   delay_ms(2000);
-                   
-                  for(z1=0;z1<=7;z1++)
-                   {
-                     putchar1(y3[z1]);
-                     //delay_ms(10);
-                     
-                   } 
-                   for(z2=0;z2<=7;z2++)
-                   {
-                     putchar1(y4[z2]);
-                     //delay_ms(10);
-                     
-                   }   
-                   for(z3=0;z3<=5;z3++)
-                   {
-                     putchar1(y5[z3]);
-                     //delay_ms(10);
-                     
-                   } 
-
-                   
-                  //putchar1('\n');
-                  //lcd_clear();
-                  lcd_gotoxy(0,0);
-                  lcd_putsf("send");
-                  delay_ms(3000); 
-                  
-//                   for(z4=0;z4<=5;z4++)
-//                   {
-//                     putchar1(y6[z4]);
-//                     //delay_ms(10);
-//                     
-//                   }
-
-               for(i=0;i<=7;i++)
-               {
-                  putchar1(smsid[i]);  
-               } 
-               putchar1('0'-22);
-                  
-                  //lcd_clear();   
-                  //s=ctrlz+'0'-'0';
-                  //putchar1(s);
-                  //oa(ctrlz,s1); 
-                  
-                  lcd_gotoxy(0,0);
-                  lcd_putsf("test");
-                  lcd_gotoxy(0,1);
-                  //lcd_putchar(s);
-                  delay_ms(3000);
-               //******************************************************
-            }
-            else
-            {
-               lcd_clear();
-               lcd_puts("No Card!");
-            }
-         else
-         {
-            lcd_clear();
-            lcd_puts("System Crashed!");
-         } 
-         
-         delay_ms(100);
-
+      char a;
+      char str[16];
+      
+      //a=getchar();
+      putchar('a');
+      delay_ms(100);
+      lcd_clear();
+      //sprintf(str,"%d",a);
+      lcd_puts("mp");
       }
 }
 
@@ -1028,15 +929,15 @@ UBRR0L=0x19;
 
 // USART1 initialization
 // Communication Parameters: 8 Data, 1 Stop, No Parity
-// USART1 Receiver: Off
+// USART1 Receiver: On
 // USART1 Transmitter: On
 // USART1 Mode: Asynchronous
-// USART1 Baud Rate: 9600
+// USART1 Baud Rate: 19200
 UCSR1A=(0<<RXC1) | (0<<TXC1) | (0<<UDRE1) | (0<<FE1) | (0<<DOR1) | (0<<UPE1) | (0<<U2X1) | (0<<MPCM1);
-UCSR1B=(0<<RXCIE1) | (0<<TXCIE1) | (0<<UDRIE1) | (0<<RXEN1) | (1<<TXEN1) | (0<<UCSZ12) | (0<<RXB81) | (0<<TXB81);
+UCSR1B=(1<<RXCIE1) | (0<<TXCIE1) | (0<<UDRIE1) | (1<<RXEN1) | (1<<TXEN1) | (0<<UCSZ12) | (0<<RXB81) | (0<<TXB81);
 UCSR1C=(0<<UMSEL1) | (0<<UPM11) | (0<<UPM10) | (0<<USBS1) | (1<<UCSZ11) | (1<<UCSZ10) | (0<<UCPOL1);
 UBRR1H=0x00;
-UBRR1L=0x33;
+UBRR1L=0x19;
 
 // Analog Comparator initialization
 // Analog Comparator: Off
